@@ -1,0 +1,659 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  USER
+  ADMIN
+  MODERATOR
+}
+
+enum SubscriptionStatus {
+  FREE
+  PRO
+  ENTERPRISE
+  CANCELED
+  PAST_DUE
+  INCOMPLETE
+}
+
+enum PlanType {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum InterviewType {
+  HR
+  TECHNICAL
+  BEHAVIORAL
+  CODING
+  SYSTEM_DESIGN
+  VOICE
+  MIXED
+}
+
+enum SessionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+  FAILED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  INTERVIEW_REMINDER
+  GOAL_REMINDER
+  SECURITY_ALERT
+  WEEKLY_REPORT
+  SUBSCRIPTION
+  ACHIEVEMENT
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  SIGNUP
+  PASSWORD_CHANGE
+  PROFILE_UPDATE
+  RESUME_UPLOAD
+  INTERVIEW_START
+  INTERVIEW_COMPLETE
+  SUBSCRIPTION_CHANGE
+  ADMIN_ACTION
+  SUSPICIOUS_ACTIVITY
+}
+
+// ============================================================
+// AUTH MODELS
+// ============================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expires   DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expires   DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+// ============================================================
+// USER MODEL
+// ============================================================
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?
+  email           String    @unique
+  emailVerified   DateTime?
+  image           String?
+  password        String?   // Argon2id hash (null for OAuth users)
+  role            Role      @default(USER)
+  twoFactorEnabled Boolean  @default(false)
+  twoFactorSecret  String?  @db.Text // Encrypted TOTP secret
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  lastLoginIp     String?
+  loginAttempts   Int       @default(0)
+  lockedUntil     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  accounts         Account[]
+  sessions         Session[]
+  profile          Profile?
+  subscription     Subscription?
+  resumes          Resume[]
+  jobDescriptions  JobDescription[]
+  interviewSessions InterviewSession[]
+  reports          Report[]
+  achievements     UserAchievement[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  usageLogs        UsageLog[]
+  streaks          UserStreak?
+  xpLogs           XpLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+// ============================================================
+// PROFILE
+// ============================================================
+
+model Profile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Personal
+  bio             String?  @db.Text
+  phone           String?
+  location        String?
+  website         String?
+  
+  // Career
+  currentRole     String?
+  targetRole      String?
+  targetCompany   String?
+  yearsExperience Int?
+  careerGoal      String?  @db.Text
+  
+  // Skills
+  skills          String[] // Array of skill names
+  languages       String[] // Programming languages
+  preferredLanguage String?  @default("javascript")
+  
+  // Education
+  education       Json?    // Array of education objects
+  
+  // Experience
+  experience      Json?    // Array of experience objects
+  
+  // Projects
+  projects        Json?    // Array of project objects
+  
+  // Social
+  githubUrl       String?
+  linkedinUrl     String?
+  portfolioUrl    String?
+  
+  // Stats (denormalized for performance)
+  totalInterviews Int      @default(0)
+  avgScore        Float    @default(0)
+  totalXp         Int      @default(0)
+  level           Int      @default(1)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================================
+// SUBSCRIPTION
+// ============================================================
+
+model Subscription {
+  id                     String              @id @default(cuid())
+  userId                 String              @unique
+  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  plan                   PlanType            @default(FREE)
+  status                 SubscriptionStatus  @default(FREE)
+  
+  // Stripe
+  stripeCustomerId       String?             @unique
+  stripeSubscriptionId   String?             @unique
+  stripePriceId          String?
+  stripeCurrentPeriodEnd DateTime?
+  
+  // Limits (per month)
+  monthlyInterviewLimit  Int                 @default(5)
+  monthlyTokenLimit      Int                 @default(50000)
+  
+  // Usage tracking (reset monthly)
+  interviewsUsed         Int                 @default(0)
+  tokensUsed             Int                 @default(0)
+  usageResetAt           DateTime            @default(now())
+  
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([userId])
+  @@index([stripeCustomerId])
+}
+
+// ============================================================
+// RESUME
+// ============================================================
+
+model Resume {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name          String
+  fileUrl       String   // Private cloud storage URL
+  fileSize      Int      // bytes
+  fileName      String   // Original filename
+  mimeType      String   @default("application/pdf")
+  
+  // Parsed content
+  rawText       String?  @db.Text
+  parsedData    Json?    // Structured parsed resume data
+  
+  // Analysis
+  atsScore      Float?
+  grammarScore  Float?
+  formatScore   Float?
+  keywordsFound String[]
+  keywordsMissing String[]
+  aiAnalysis    Json?    // Full AI analysis result
+  
+  isActive      Boolean  @default(true)  // Primary resume
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================================
+// JOB DESCRIPTION
+// ============================================================
+
+model JobDescription {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title         String
+  company       String?
+  content       String   @db.Text
+  
+  // Match analysis
+  matchScore    Float?
+  skillGaps     String[]
+  missingKeywords String[]
+  optimizations Json?
+  customQuestions Json?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================================
+// INTERVIEW SESSION
+// ============================================================
+
+model InterviewSession {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title           String        @default("Interview Session")
+  type            InterviewType
+  status          SessionStatus @default(PENDING)
+  difficulty      Int           @default(2) // 1=Easy, 2=Medium, 3=Hard
+  
+  // Context
+  jobTitle        String?
+  company         String?
+  jobDescription  String?       @db.Text
+  resumeSnapshot  Json?         // Resume data at time of interview
+  
+  // Results
+  overallScore    Float?
+  technicalScore  Float?
+  communicationScore Float?
+  confidenceScore Float?
+  problemSolvingScore Float?
+  leadershipScore Float?
+  
+  // Feedback
+  aiFeedback      Json?         // Structured AI feedback
+  strengths       String[]
+  improvements    String[]
+  learningRoadmap Json?
+  
+  // Metadata
+  duration        Int?          // seconds
+  questionCount   Int           @default(0)
+  tokensUsed      Int           @default(0)
+  costUsd         Float         @default(0)
+  
+  startedAt       DateTime      @default(now())
+  completedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Relations
+  messages        InterviewMessage[]
+  codeSubmissions CodeSubmission[]
+  voiceSession    VoiceSession?
+  report          Report?
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+}
+
+// ============================================================
+// INTERVIEW MESSAGE (Conversation turns)
+// ============================================================
+
+model InterviewMessage {
+  id          String        @id @default(cuid())
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  role        MessageRole
+  content     String        @db.Text
+  
+  // Message metadata
+  isQuestion  Boolean       @default(false)
+  questionNumber Int?
+  followUpOf  String?       // ID of parent message
+  
+  // Scoring (for user messages)
+  score       Float?
+  feedback    String?       @db.Text
+  
+  createdAt   DateTime      @default(now())
+
+  @@index([sessionId])
+}
+
+// ============================================================
+// CODE SUBMISSION (Coding Interviews)
+// ============================================================
+
+model CodeSubmission {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  problemId   String?
+  problemTitle String?
+  
+  language    String
+  code        String   @db.Text
+  
+  // Execution results
+  stdout      String?  @db.Text
+  stderr      String?  @db.Text
+  exitCode    Int?
+  executionTime Float? // ms
+  
+  // Test results
+  testsPassed Int      @default(0)
+  testsTotal  Int      @default(0)
+  
+  // AI review
+  aiReview    Json?    // { timeComplexity, spaceComplexity, bugs, suggestions, score }
+  
+  isCorrect   Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+// ============================================================
+// VOICE SESSION
+// ============================================================
+
+model VoiceSession {
+  id          String   @id @default(cuid())
+  sessionId   String   @unique
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  transcript  String?  @db.Text
+  audioUrl    String?  // Processed audio URL (if recording enabled)
+  
+  // Scores
+  fluencyScore     Float?
+  confidenceScore  Float?
+  clarityScore     Float?
+  paceScore        Float?
+  grammarScore     Float?
+  
+  // Analysis
+  wordsPerMinute   Float?
+  fillerWordCount  Int?
+  fillerWords      String[]
+  pauseCount       Int?
+  
+  // Feedback
+  communicationAnalysis Json?
+  improvements     String[]
+  
+  duration         Int?  // seconds
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sessionId])
+}
+
+// ============================================================
+// REPORT
+// ============================================================
+
+model Report {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId   String   @unique
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  title       String
+  pdfUrl      String?  // Generated PDF URL
+  
+  // Scores (snapshot at time of generation)
+  overallScore       Float
+  technicalScore     Float?
+  communicationScore Float?
+  confidenceScore    Float?
+  
+  // Content
+  summary     String?  @db.Text
+  strengths   String[]
+  improvements String[]
+  roadmap     Json?
+  
+  isPublic    Boolean  @default(false)  // Public sharing
+  shareToken  String?  @unique          // For public share link
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+// ============================================================
+// GAMIFICATION
+// ============================================================
+
+model Achievement {
+  id          String    @id @default(cuid())
+  key         String    @unique  // e.g. "first_interview", "perfect_score"
+  title       String
+  description String
+  icon        String    // Emoji or icon name
+  xpReward    Int       @default(100)
+  category    String    @default("general")
+  rarity      String    @default("common")  // common, rare, epic, legendary
+  
+  users       UserAchievement[]
+  
+  createdAt   DateTime  @default(now())
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id])
+  
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+}
+
+model XpLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  amount      Int
+  reason      String   // e.g. "Completed HR Interview"
+  sourceType  String   // "interview", "achievement", "streak", "daily_challenge"
+  sourceId    String?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model UserStreak {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  currentStreak   Int      @default(0)
+  longestStreak   Int      @default(0)
+  lastActivityAt  DateTime @default(now())
+  
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        NotificationType
+  title       String
+  message     String
+  actionUrl   String?
+  
+  isRead      Boolean          @default(false)
+  readAt      DateTime?
+  
+  createdAt   DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+// ============================================================
+// USAGE LOGS (AI Token Tracking)
+// ============================================================
+
+model UsageLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  model       String
+  tokensUsed  Int
+  costUsd     Float
+  requestType String   // "interview", "code_review", "resume_analysis"
+  sessionId   String?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================================
+// AUDIT LOGS (Security)
+// ============================================================
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  action      AuditAction
+  resource    String?
+  resourceId  String?
+  details     Json?
+  
+  ipAddress   String?
+  userAgent   String?     @db.Text
+  
+  success     Boolean     @default(true)
+  errorMessage String?
+  
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}

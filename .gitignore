@@ -1,0 +1,28 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js build and cache
+/.next/
+/out/
+/build/
+
+# Production / local files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local.copy
+
+# System files
+.DS_Store
+Thumbs.db
+
+# TypeScript compile cache
+*.tsbuildinfo
+next-env.d.ts
